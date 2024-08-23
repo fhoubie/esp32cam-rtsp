@@ -45,6 +45,7 @@ auto param_hmirror = iotwebconf::Builder<iotwebconf::CheckboxTParameter>("hm").l
 auto param_vflip = iotwebconf::Builder<iotwebconf::CheckboxTParameter>("vm").label("Vertical mirror").defaultValue(DEFAULT_VERTICAL_MIRROR).build();
 auto param_dcw = iotwebconf::Builder<iotwebconf::CheckboxTParameter>("dcw").label("Downsize enable").defaultValue(DEFAULT_DCW).build();
 auto param_colorbar = iotwebconf::Builder<iotwebconf::CheckboxTParameter>("cb").label("Colorbar").defaultValue(DEFAULT_COLORBAR).build();
+auto param_led_intensity = iotwebconf::Builder<iotwebconf::UIntTParameter<byte>>("li").label("LED intensity").defaultValue(DEFAULT_LED_INTENSITY).min(0).max(100).build();
 
 // Camera
 OV2640 cam;
@@ -60,6 +61,7 @@ IotWebConf iotWebConf(thingName.c_str(), &dnsServer, &web_server, WIFI_PASSWORD,
 
 // Camera initialization result
 esp_err_t camera_init_result;
+bool config_changed = false;
 
 void handle_root()
 {
@@ -304,18 +306,49 @@ void on_connected()
   else
     log_e("Not starting RTSP server: camera not initialized");
 }
+void handle_flash()
+{
+  log_v("handle_flash");
 
+/*  if (!web_server.authenticate("admin", iotWebConf.getApPasswordParameter()->valueBuffer))
+  {
+    web_server.requestAuthentication(BASIC_AUTH, APP_TITLE, "401 Unauthorized<br><br>The password is incorrect.");
+    return;
+  }
+*/
+  // If no value present, use value from config
+  if (web_server.hasArg("v"))
+  {
+    auto v = (uint8_t)min(web_server.arg("v").toInt(), 255L);
+    // If conversion fails, v = 0
+    analogWrite(LED_FLASH, v);
+  }
+  else
+  {
+    analogWrite(LED_FLASH, param_led_intensity.value());
+  }
+
+  web_server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  web_server.send(200);
+}
 void on_config_saved()
 {
   log_v("on_config_saved");
+#ifdef LED_FLASH
+  analogWrite(LED_FLASH, param_led_intensity.value());
+#endif
+  
   update_camera_settings();
+  config_changed = true;
 }
 
 void setup()
 {
   // Disable brownout
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
-
+#ifdef LED_FLASH
+  pinMode(LED_FLASH, OUTPUT);
+#endif
 #ifdef USER_LED_GPIO
   pinMode(USER_LED_GPIO, OUTPUT);
   digitalWrite(USER_LED_GPIO, !USER_LED_ON_LEVEL);
@@ -369,6 +402,8 @@ void setup()
   iotWebConf.getApTimeoutParameter()->visible = true;
   iotWebConf.setConfigSavedCallback(on_config_saved);
   iotWebConf.setWifiConnectionCallback(on_connected);
+
+  iotWebConf.setStatusPin(33, LOW);
 #ifdef USER_LED_GPIO
   iotWebConf.setStatusPin(USER_LED_GPIO, USER_LED_ON_LEVEL);
 #endif
@@ -397,7 +432,7 @@ void setup()
   web_server.on("/snapshot", HTTP_GET, handle_snapshot);
   // Camera stream
   web_server.on("/stream", HTTP_GET, handle_stream);
-
+  web_server.on("/flash", HTTP_GET, handle_flash);
   web_server.onNotFound([]()
                         { iotWebConf.handleNotFound(); });
 }
